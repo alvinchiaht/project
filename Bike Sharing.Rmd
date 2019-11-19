@@ -1,0 +1,417 @@
+# Bike Sharing Dataset - Exploratary Data Analysis
+
+Load library and dataset
+
+```{R, message = FALSE, warning = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(plyr)
+library(tidyr)
+library(dplyr)
+library(lattice)
+library(lubridate)
+library(lettercase)
+library(reshape2)
+library(caret)
+library(plotly)
+library(GGally)
+library(openxlsx)
+library(PerformanceAnalytics)
+
+setwd("C:/Users/Alvin/Documents/WorkDirectory")
+bikeshare <- read.csv("bikes_2011.csv",header=T, colClasses="character") #raw bike_2011 dataset
+```
+
+Analyse raw data structure - non-visual analysis
+
+```{R}
+class(bikeshare) 
+dim(bikeshare) 
+names(bikeshare) 
+glimpse(bikeshare) 
+summary(bikeshare)
+```
+
+Data preparation and cleaning
+
+```{R}
+any(is.na(bikeshare)) # No missing data
+
+#0 or more (*) spaces (\\s) between beginning (^) and end ($) of string
+any(grepl("^\\s*$",bikeshare)) # No space before or after an input in each cell
+```
+
+Covert variables type (characters, numeric, integer, factor, logical)
+
+```{R, warning = FALSE}
+bikeshare$instant <- as.numeric(bikeshare$instant)
+bikeshare$dteday <- ymd(bikeshare$dteday) #issue with date format
+bikeshare$season <- as.numeric(bikeshare$season)
+bikeshare$hr <- as.numeric(bikeshare$hr)
+bikeshare$holiday <- as.integer(bikeshare$holiday)
+bikeshare$workingday <- as.logical(as.integer(bikeshare$workingday))
+bikeshare$weathersit <- as.numeric(bikeshare$weathersit)
+bikeshare$temp <- as.numeric(bikeshare$temp)
+bikeshare$atemp <- as.numeric(bikeshare$atemp)
+bikeshare$hum <- as.numeric(bikeshare$hum)
+bikeshare$windspeed <- as.numeric(bikeshare$windspeed)
+bikeshare$casual <- as.numeric(bikeshare$casual)
+bikeshare$registered <- as.numeric(bikeshare$registered)
+bikeshare$cnt <- as.numeric(bikeshare$cnt)
+bikeshare$weekday <- as.integer(bikeshare$weekday)
+
+# Convert variables "year", "month" and "date" to Date format
+year <- format(bikeshare$dteday,"%y")
+month <- format(bikeshare$dteday,"%m")
+day <- format(bikeshare$dteday,"%a") 
+
+# Convert feeling temperature to degree celsius with formula atemp = (t-t_min)/(t_max-t_min) where t_min = -16 and t_max = 50
+a_temp <- (bikeshare$atemp*66)-16
+
+bikeshare_1 <- bikeshare %>%
+  mutate(.,yr = year) %>%
+  mutate(.,mnth = month) %>%
+  mutate(.,weekday_char = day) %>%
+  mutate(.,cnt1 = bikeshare$registered + bikeshare$casual) %>%   #calculate total demand by sum of registered+casual user
+  mutate(., atemp = a_temp)
+
+```
+
+Check if cnt matches the sum of registered & casual bike user
+
+```{R, warning = FALSE}
+check_cnt <- bikeshare_1 %>%
+  select(cnt, cnt1) %>%
+  mutate(., validate = ifelse(cnt == cnt1, TRUE, FALSE))
+
+which(grepl(FALSE, check_cnt$validate)) #conclusion: not conflicting values found between cnt and sum of registered & casual bike user
+```
+
+Create new column for holiday + weekend (non-working day)
+
+```{R}
+bikeshare_2 <- bikeshare_1 %>%
+  mutate(.,nonworking = if_else(
+    bikeshare_1$holiday == 1, "Yes", ifelse(
+    bikeshare_1$weekday == 6, "Yes", ifelse(
+      bikeshare_1$weekday == 0, "Yes", "No"  
+    )))) %>%
+  select(-cnt1)
+
+glimpse(bikeshare_2) #new class
+summary(bikeshare_2) #outliers
+```
+
+Check number of users for outliers
+
+```{R, warning = FALSE}
+hist(bikeshare$casual, breaks = 10, xlab = 'Demand from casual users', main = 'Distribution of Causual user bike rental Count') 
+# max is not an outlier
+
+hist(bikeshare$registered, breaks = 20, xlab = 'Demand from registered users', main = 'Distribution of Registered user bike rental Count') 
+# max is not an outlier
+
+# Naming variables
+cols <- c("index","date","season","year","month","hour","holiday","weekday","working.day","weather","temp","atemp", "humidity", "windspeed", "nonmember", "member", "totaldemand", "weekday.char", "nonworking" )
+colnames(bikeshare_2) <- cols
+glimpse(bikeshare_2) #new name
+```
+
+
+Analysis
+
+Distribution of total bike rental count
+
+```{R, warning = FALSE}
+bikerentalcount = hist(bikeshare$cnt, breaks = 25, ylab = 'Frequency of Rental', ylim = c(0,2000), xlim = c(0, 700), xlab = 'Total Bike Rental Count', main = 'Distribution of Total Bike Rental Count', col = 'blue' )
+
+xfit = seq(min(bikeshare$cnt),max(bikeshare$cnt), length = 50)
+yfit = dnorm(xfit, mean =mean(bikeshare$cnt),sd=sd(bikeshare$cnt))
+yfit = yfit*diff(bikerentalcount$mids[1:2])*length(bikeshare$cnt)
+lines(xfit,yfit, col='pink', lwd= 3)
+```
+
+Question 1 - How does each variable affect the demand for bike rental?
+
+Prepare summary by total demand grouped by "month" and "weather"
+
+```{R, warning = FALSE}
+count_summary <- ddply(bikeshare_2,.(season, hour, month, weather, weekday), summarise, 
+      temperature = mean(atemp), 
+      humidity = mean(humidity), 
+      windspeed = mean(windspeed), 
+      count = mean(totaldemand))
+
+# Factor 1: season
+rename_season <- count_summary %>%
+  mutate(., season = as.factor(season)) %>%
+  mutate(., season = revalue(season,c("1"="Spring", "2"="Summer", "3"="Fall", "4" = "Winter"))) #rename the levels in season( spring = 1, summer = 2, fall =3, winter =4)
+
+ggplot(rename_season, aes(x = season, y = count, fill = factor(season))) +
+  geom_boxplot(outlier.color = adjustcolor("black", alpha.f = 0), na.rm = TRUE) +
+  ylab("Bike Rentals") +
+  xlab("Season") +
+  ggtitle("\n Bike Rental per Season \n") +
+  scale_fill_manual(values = c("#22b8d6", "#228bd6", "#225bd6", "#4922d6"), 
+                    name = "Season:",
+                    breaks = c(1, 2, 3, 4),
+                    labels = c("Spring", "Summer", "Fall", "Winter"))
+
+# Plot avg temperature per season
+rename_season1 <- count_summary %>%
+  select(season, temperature) %>%
+  mutate(., season = as.factor(season)) %>%
+  mutate(., season = revalue(season,c("1"="Spring", "2"="Summer", "3"="Fall", "4" = "Winter"))) #rename the levels in season( spring = 1, summer = 2, fall =3, winter =4)
+
+avg_temp <- rename_season1 %>%
+  group_by(season)%>%
+  summarise(temp = mean(temperature)) #calculate avg temperature per season
+
+ggplot(avg_temp, aes(x = season, y = temp, fill = season)) +
+  geom_col() +
+  xlab("Season") +
+  ylab("Temperature (degree celsius") +
+  ggtitle("\n Temperature per season \n") +
+  scale_fill_manual("legend", values = c("Spring" = "pink", "Summer" = "orange", "Fall" = "brown", "Winter" = "blue"))
+
+# Spring has the least demand >> demand is affected largely by weather conditions 
+
+
+# Factor 2: weather
+rename_weather <- count_summary %>%
+  mutate(., weather = as.factor(weather)) %>%
+  mutate(., weather = revalue(weather,c("1"="Clear", "2"="Mist", "3"="Light rain/snow", "4" = "Heavy rain"))) #rename the levels in weather( clear = 1, mist = 2, light rain =3, heavy rain =4)
+
+ggplot(rename_weather, aes(x = weather, y = count, fill = factor(weather))) +
+  geom_boxplot(outlier.color = adjustcolor("black", alpha.f = 0), na.rm = TRUE) +
+  ylab("Bike Rentals") +
+  xlab("Weather") +
+  ggtitle("\n Impact on demand by weather \n") +
+  scale_fill_manual(values = c("#22b8d6", "#228bd6", "#225bd6", "#4922d6"), 
+                    name = "Weather:",
+                    breaks = c(1, 2, 3, 4),
+                    labels = c("Clear", "Mist", "Light snow"
+                             , "Heavy rain"))
+```
+
+Adverse weather conditions (heavy rain) significantly affects demand
+
+```{R, warning = FALSE}
+# Secondary factor 2.1: Humidity 
+weather_names <- c(
+  "1" = "Clear",
+  "2" = "Mist",
+  "3" = "Light Rain/Snow",
+  "4" = "Heavy Rain")
+
+ggplot(count_summary, aes(x = humidity*100, y = count, color = factor(weather))) +
+  geom_smooth(fill = NA, size = 1, method="gam", formula = y ~s(x)) +
+  xlab("Humidity (%)") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Impact on demand by weather (Humidity) \n") +
+  scale_color_discrete(name = "Weather:",
+                       breaks = c(1, 2, 3, 4),
+                       labels = c("Clear", 
+                                  "Mist", 
+                                  "Light Snow", 
+                                  "Heavy Rain")) +
+  facet_wrap(~ weather, labeller = as_labeller(weather_names))
+
+# Higher relative humidity leads to lower bike demand
+
+# Secondary factor 2.2: Temperature
+ggplot(count_summary, aes(x = temperature, y = count, color = factor(weather))) +
+  geom_smooth(fill = NA, size = 1, method="gam", formula = y ~s(x)) +
+  xlab("Feeling temperature (Degree Celcius)") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Impact on demand by weather (Temp) \n") +
+  scale_color_discrete(name = "Weather:",
+                       breaks = c(1, 2, 3),
+                       labels = c("Clear", 
+                                  "Mist", 
+                                  "Light Snow")) +
+  facet_wrap(~ weather, labeller = as_labeller(weather_names))
+
+# Lower temper leads to lower demand. Optimal temperature with higher demand = 30-40 celsius
+
+# Secondary factor 2.3: Windspeed
+
+ggplot(count_summary, aes(x = windspeed, y = count, color = factor(weather))) +
+  geom_smooth(fill = NA, size = 1, method="gam", formula = y ~s(x)) +
+  xlab("Windspeed") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Impact on demand by weather (Windspeed) \n") +
+  scale_color_discrete(name = "Weather:",
+                       breaks = c(1, 2, 3),
+                       labels = c("Clear", 
+                                  "Mist", 
+                                  "Light Snow")) +
+  facet_wrap(~ weather, labeller = as_labeller(weather_names))
+```
+
+Factor 3: holiday and weekend vs workday
+
+```{R, warning = FALSE}
+temp1 <- bikeshare_2 %>%
+  select(date, nonworking, totaldemand, season) %>%
+  group_by(date, nonworking) %>%
+  mutate(., month = as.factor(format(date, "%m"))) %>%
+  mutate(., season = as.factor(season))
+  
+temp2 <- aggregate(temp1[,3], list(temp1$season, temp1$nonworking, temp1$month), mean) 
+
+# Calculate average daily demand for bike rental per working vs nonworking dat per month
+temp3 <- temp2 %>%
+  rename(is_nonworking_day = Group.2,) %>%
+  rename(season = Group.1) %>%
+  rename(month = Group.3)
+
+season_names <- temp3 %>%
+  mutate(., season = revalue(season,c("1"="Spring", "2"="Summer", "3"="Fall", "4" = "Winter"))) #rename the levels in season( spring = 1, summer = 2, fall =3, winter =4)
+
+ggplot(season_names, aes(x = month, y = totaldemand, fill = is_nonworking_day)) +
+  geom_bar(stat = "identity", position='dodge') +
+  ylab("Bike Rentals") +
+  xlab("Month") +
+  facet_wrap (~season)
+```
+
+Factor 4: hours of day
+
+```{R, warning = FALSE}
+ggplot(count_summary, aes(x = hour, y = count, color = factor(weekday))) +
+  geom_smooth(fill = NA, size = 1, method="gam", formula = y ~s(x)) +
+  xlab("Hour") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Bike rental per hour\n") +
+  scale_color_discrete(name = "Weekday:",
+                       breaks = c(0, 1, 2, 3, 4, 5, 6),
+                       labels = c("Sun", 
+                                  "Mon", 
+                                  "Tue",
+                                  "Wed",
+                                  "Thu",
+                                  "Fri",
+                                  "Sat"))
+```
+
+Question 2 - Which variables has the highest correlation (to find the most important factor)?
+
+```{R, warning = FALSE}
+Temp4 <- bikeshare_2 %>%
+  mutate(., nonworking = ifelse(nonworking == "Yes", 1, 0)) %>%
+  mutate(., month = as.numeric(month))
+
+correlation_chart <- Temp4 %>%
+  select(season, month, nonworking, weather, atemp, humidity, windspeed, weekday, hour, totaldemand)
+
+glimpse(correlation_chart)
+
+coral_red = rgb(1.00,0.30,0.30); pumpkin = rgb(1.00,0.40,0.10); corn = rgb(1.00,0.90,0.40); red=rgb(1.00,0.00,0.00)
+RtoWrange<-colorRampPalette(c(corn, red ))
+WtoGrange<-colorRampPalette(c(coral_red, corn)) 
+
+ggsave("00_correlation_matrix.png",  
+       ggplot(melt(cor(correlation_chart)), aes(x = Var1, y = Var2, fill = value)) +
+         geom_tile() +
+         scale_fill_gradient2("", low = WtoGrange(100), mid = RtoWrange(100), high = "gray") +
+         geom_text(aes(label = round(value, 2))) +
+         coord_flip() + 
+         ggtitle("\n Factor Correlation Matrix \n") +
+         theme(plot.title = element_text(size = 14),
+               axis.text.x = element_text(angle = 45, vjust = 0.6),
+               axis.ticks.y = element_blank()) +
+         xlab("") + ylab(""))
+```
+
+Moderate relationship between demand and atemp/hour
+
+Question 3 - How can we forecast demand per day?
+
+Based on the correlation matrix, we select hour, humidty and temperature to build a simple predictive model to forecast demand  
+Regression model to answer the question - for a given hour, humidty and temperature, what will the demand be like?
+ 
+```{R, warning = FALSE}
+model <- lm(count ~ hour + temperature + humidity , data = count_summary)
+summary(model)
+
+layout(matrix(c(1,2,3,4),2,2))
+
+plot(model)
+
+ggplot(data=count_summary, aes(model$residuals)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "purple4") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line.x=element_line(),
+        axis.line.y=element_line()) +
+  ggtitle("Histogram for Model Residuals")
+```
+
+Findings: residual is skewed towards the left. and R-square is only 0.37 -> not a good model  
+We are not able to build a good model to forecast demand with the available information We need more information, such as cost/profit and supply restrictions to build a more comprehensive model
+
+Question 4 - Are there any difference in member/non-member renting behaviour? 
+
+Demand for members versus demand for nonmembers
+
+```{R, warning = FALSE}
+hist(bikeshare_2$member, breaks=25 , col=rgb(1,0,0,0.5) , xlab="member demand" , ylab="frequency of rental" , main="", ylim=c(0, 5000))
+hist(bikeshare_2$nonmember, breaks=10 , col=rgb(0,0,1,0.5) , xlab="non-member demand" , ylab="frequency of rental" , main="",  ylim=c(0, 5000))
+
+hist(bikeshare_2$member, breaks=25, col=rgb(1,0,0,0.5), xlab="Member/Non-member Demand", 
+     ylab="Frequency of Rental" , main="Distribution of Member and Nonmember Bike Rental Demand", ylim=c(0, 5000)) 
+hist(bikeshare_2$nonmember, breaks=10, col=rgb(0,0,1,0.5), add=T, ylim=c(0, 5000))
+legend("topright", legend=c("Member","NonMember"), col=c(rgb(1,0,0,0.5), 
+                                                         rgb(0,0,1,0.5)), pt.cex=2, pch=15 )
+```
+
+Relationship between demand and atemp (highest correlation based on qn 2 results)
+
+```{R, warning = FALSE}
+select_temp <- bikeshare_2 %>%
+  select(member, nonmember, atemp) %>%
+  group_by(atemp) %>%
+  summarise(avg_mbr = mean(member), avg_nonmbr = mean(nonmember))
+
+long <- gather(select_temp, ismember, demand, -atemp)
+
+head(long)
+
+ggplot(long, aes(x = atemp, y = demand, fill = factor(ismember))) +
+  geom_bar(stat = "identity", position='dodge')+
+  xlab("Feeling temperature (Degree Celsius)") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Comparing demand from member vs non-member\n") +
+  scale_color_discrete(name = "is_member",
+                       breaks = c("avg_mbr","avg_nonmbr"),
+                       labels = c("Member", 
+                                  "Non member")) +
+  scale_fill_manual("legend",values = c("avg_mbr" = "dodgerblue3", "avg_nonmbr" = "indianred2")) 
+```
+
+Relationship between demand and hour (highest correlation based on qn 2 results)
+
+```{R, warning = FALSE}
+select_hour <- bikeshare_2 %>%
+  select(member, nonmember, hour) %>%
+  group_by(hour) %>%
+  summarise(avg_mbr = mean(member), avg_nonmbr = mean(nonmember))
+
+long2 <- gather(select_hour, ismember, demand, -hour)
+
+head(long2)
+
+ggplot(long2, aes(x = hour, y = demand, fill = factor(ismember))) +
+  geom_bar(stat = "identity", position='dodge')+
+  xlab("Hour") +
+  ylab("Bike Rentals") +
+  ggtitle("\n Comparing demand from member vs non-member\n") +
+  scale_color_discrete(name = "is_member",
+                       breaks = c("avg_mbr","avg_nonmbr"),
+                       labels = c("Member", 
+                                  "Non member")) +
+  scale_fill_manual("legend",values = c("avg_mbr" = "mediumorchid3", "avg_nonmbr" = "orange3"))
+```
+
+
+
