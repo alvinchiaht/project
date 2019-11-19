@@ -1,0 +1,131 @@
+# Predicting Loan Default using Lending Club Dataset
+
+**Part 3: Evaluation**
+
+Load library and dataset
+
+```{R}
+
+pacman::p_load(dplyr, tidyverse, ggplot2, reshape2, ggpubr, DescTools, caret)
+
+setwd("C:/Users/Alvin/Documents/R Work Directory")
+foreval = read.csv("foreval.csv", as.is = TRUE)
+```
+
+Convert target loan status, credit policy and term to factor
+
+```{R}
+tofactor = c("targetloanstatus","creditpolicy","term")
+foreval[,tofactor] = lapply(foreval[,tofactor], as.factor)
+```
+
+Write function for evaluation
+
+```{R}
+set.seed(2019)
+
+prroc = function(predict, reference) {
+  #profits -> predict no-default correctly (true-negative)
+  #lost profits -> predict default incorrectly (false-positive)
+  #losses -> predict no-default incorrectly (false-negative)
+  thres = seq(0,1,0.01)
+  mydf = data.frame(Threshold = numeric(),
+                    Precision = numeric(),
+                    Recall = numeric(),
+                    F1 = numeric(),
+                    fpr = numeric())
+  for (i in thres) {
+    cm = confusionMatrix(data = as.factor(as.numeric(predict>i)), reference = reference,positive="1")
+    precision = cm[["byClass"]][["Precision"]]
+    recall = cm[["byClass"]][["Recall"]]
+    f1 = cm[["byClass"]][["F1"]]
+    fpr = 1- cm[["byClass"]][["Specificity"]]
+    mydf[nrow(mydf) + 1,] = list(i,precision, recall, f1, fpr)
+  }
+  return(mydf)
+}
+```
+
+Evaluate models based on ROC and Precision-Recall
+
+```{R, warning=FALSE}
+prroc_glm = prroc(foreval$pvalue_glm, foreval$targetloanstatus)
+prroc_bag = prroc(foreval$pvalue_bag, foreval$targetloanstatus)
+prroc_tree = prroc(foreval$pvalue_tree, foreval$targetloanstatus)
+prroc_forest = prroc(foreval$pvalue_forest, foreval$targetloanstatus)
+prroc_boosttree = prroc(foreval$pvalue_boosttree, foreval$targetloanstatus)
+prroc_boostlinear = prroc(foreval$pvalue_boostlinear, foreval$targetloanstatus)
+prroc_NN = prroc(foreval$pvalue_NN, foreval$targetloanstatus)
+
+combinerecall = data.frame(threshold = prroc_glm$Threshold,
+                           glm = prroc_glm$Recall,
+                           glmbag = prroc_bag$Recall,
+                           tree = prroc_tree$Recall,
+                           forest = prroc_forest$Recall,
+                           boosttree = prroc_boosttree$Recall,
+                           boostlinear = prroc_boostlinear$Recall,
+                           NN = prroc_NN$Recall)
+
+combineprecision = data.frame(threshold = prroc_glm$Threshold,
+                              glm = prroc_glm$Precision,
+                              glmbag = prroc_bag$Precision,
+                              tree = prroc_tree$Precision,
+                              forest = prroc_forest$Precision,
+                              boosttree = prroc_boosttree$Precision,
+                              boostlinear = prroc_boostlinear$Precision,
+                              NN = prroc_NN$Precision)
+
+combinefpr = data.frame(threshold = prroc_glm$Threshold,
+                        glm = prroc_glm$fpr,
+                        glmbag = prroc_bag$fpr,
+                        tree = prroc_tree$fpr,
+                        forest = prroc_forest$fpr,
+                        boosttree = prroc_boosttree$fpr,
+                        boostlinear = prroc_boostlinear$fpr,
+                        NN = prroc_NN$fpr)
+
+# Plot PR curves
+cbind(combinerecall %>%
+        gather(key = Model, value = Recall, -threshold),
+      combineprecision %>%
+        gather(key = Model, value = Precision, -threshold) %>%
+        select(Precision)) %>%
+  ggplot(aes(x = Recall, y = Precision, color = Model)) +
+  geom_line() + 
+  scale_color_brewer(palette = "Dark2") + 
+  labs(title = "PR Curves")
+
+# compute AUC - to update model name in below code to get AUC for each model
+cbind(combinerecall %>%
+        gather(key = Model, value = Recall, -threshold),
+      combineprecision %>%
+        gather(key = Model, value = Precision, -threshold) %>%
+        select(Precision)) %>%
+  filter(Model == "glm") -> mydf
+
+AUC(mydf$Recall, mydf$Precision, method = "spline")
+```
+
+Plot ROC curve
+
+```{R, warning=FALSE}
+cbind(combinefpr %>%
+        gather(key = Model, value = fpr, -threshold),
+      combinerecall %>%
+        gather(key = Model, value = Recall, -threshold) %>%
+        select(Recall)) %>%
+  ggplot(aes(x = fpr, y = Recall, color = Model)) +
+  geom_line() + 
+  scale_color_brewer(palette = "Dark2") + 
+  labs(title = "ROC curves")
+
+# compute AUC - to update model name in below code to get AUC for each model
+cbind(combinefpr %>%
+        gather(key = Model, value = fpr, -threshold),
+      combinerecall %>%
+        gather(key = Model, value = Recall, -threshold) %>%
+        select(Recall)) %>%
+  filter(Model == "glm") -> mydf2
+
+AUC(mydf2$fpr, mydf2$Recall, method = "spline")
+```
