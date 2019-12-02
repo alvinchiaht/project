@@ -1,0 +1,98 @@
+# Customer Analytics Practice Project
+# R Code for cluster analysis
+
+Load library and dataset
+
+```{R, message = FALSE, warning = FALSE}
+library(factoextra)
+library(FactoMineR)
+library(clustertend)
+library(ggplot2)
+library(dplyr)
+library(psych)
+library(GPArotation)
+library(reshape2)
+library(readxl)
+library(caret)
+library(fpc)
+
+setwd("C:/Users/Alvin/Documents/MTECH EBAC/EBA5003/CA/Final/Submission/Dataset")
+caravan1<-read_excel("Dataset_15PC.xlsx")
+```
+
+Data cleaning - remove repeated entry
+```{R}
+caravan1 = caravan1 %>%
+  select(-MGEMLEEF)
+```
+
+Create 50/50 partition for train and test set for clustering
+
+```{R}
+set.seed(9997)
+
+inds = createDataPartition(caravan1$CARAVAN, p=0.5, list=FALSE,times=1)
+
+caravanTrain = caravan1[inds,]
+nrow(caravanTrain)/nrow(caravan1)
+
+caravanTest = caravan1[-inds,]
+nrow(caravanTest)/nrow(caravan1)
+```
+
+K medoid on train set
+
+```{R}
+set.seed(9997)
+pam.train<-eclust(caravanTrain[,c(89:103)],"pam",k=4,graph=FALSE)
+print(pam.train)
+table(pam.train$cluster)
+
+plotcluster(caravanTrain[,c(89:103)],pam.train$cluster,main="4 cluster solution")
+fviz_silhouette(pam.train,palette="jco",ggtheme=theme_classic())
+```
+
+K medoid on test set
+
+```{R}
+set.seed(9997)
+pam.test<-eclust(caravanTest[,c(89:103)],"pam",k=4,graph=FALSE)
+print(pam.test)
+table(pam.test$cluster)
+
+plotcluster(caravanTest[,c(89:103)],pam.test$cluster,main="4 cluster solution")
+fviz_silhouette(pam.test,palette="jco",ggtheme=theme_classic())
+```
+
+Elbow Method
+
+```{R}
+fviz_nbclust(caravanTrain[,c(89:103)],kmeans,method="wss") + labs(subtitle="Elbow Method") + geom_vline(xintercept=4,linetype=2)
+```
+
+Append cluster number to original dataset
+
+```{R}
+caravanTrain$KMEDOID_4<-pam.train$cluster
+write.csv(caravanTrain,"caravanTrain.csv")
+
+caravanTest$KMEDOID_4<-pam.test$cluster
+write.csv(caravanTest,"caravanTest.csv")
+```
+
+Show distribution of train and test dataset by whether customer purchased caravan insurance
+
+```{R}
+p=table( caravanTrain$KMEDOID_4,caravanTrain$CARAVAN);p;q=prop.table(p,1);q
+addmargins(p)
+p2=table( caravanTest$KMEDOID_4,caravanTest$CARAVAN);p2;q2=prop.table(p2,1);q2
+addmargins(p2)
+```
+
+Show biplot of train and test dataset
+
+```{R}
+plotcluster(caravanTrain[,c(89:103)],pam.train$cluster,main="4 cluster PAM train solution")
+plotcluster(caravanTest[,c(89:103)],pam.test$cluster,main="4 cluster PAM test solution")
+```
+

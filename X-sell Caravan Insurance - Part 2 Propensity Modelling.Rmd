@@ -1,0 +1,473 @@
+# Customer Analytics Practice Project
+# R Code for logistic regression and propensity modelling
+
+Load library and dataset
+
+```{R, message = FALSE, warning = FALSE}
+library("readxl")
+library(caret)
+library(tidyverse)
+library(car)
+library(pROC)
+library(fastDummies)
+library(ROCR)
+library(rbin)
+
+setwd("C:/Users/Alvin/Documents/MTECH EBAC/EBA5003/CA/Final/Submission/Dataset")
+caravan<-read_excel("Principlecompscore.xlsx")
+str(caravan)
+```
+
+Data cleaning, preparation and selection
+
+```{R}
+# remove repeated entry
+caravan1 = caravan %>%
+  select(-MGEMLEEF) 
+
+# select variables
+caravan1 = caravan1[,c(1:6, 28:67, 89:103)]
+
+# convert MOSTYPE, MOSHOOFD and CARAVAN to factor
+col = caravan1[,c(3, 6, 7)]
+caravan1[,c(3, 6, 7)] = lapply(col, factor)
+```
+
+**Logistic Regression**
+
+Create train and test set for logistic regression
+
+```{R}
+caravanTrain = caravan1 %>%
+  filter(ORIGIN == "train")
+
+caravanTrain = caravanTrain %>%
+  select(-ORIGIN)
+
+nrow(caravanTrain)/nrow(caravan1)
+
+summary(caravanTrain)
+
+caravanTest = caravan1 %>%
+  filter(ORIGIN == "test")
+
+caravanTest = caravanTest %>%
+  select(-ORIGIN)
+
+nrow(caravanTest)/nrow(caravan1)
+```
+
+Perform upsampling due to imblanced dataset
+
+```{R}
+set.seed(123)
+caravanTrainUP = upSample(caravanTrain, y = caravanTrain$CARAVAN, list = TRUE)[[1]]
+glimpse(caravanTrainUP)
+
+caravanTrainUP  %>%
+  group_by(CARAVAN) %>%
+  count(CARAVAN)
+```
+
+Perform logistic regression using upsampled dataset 
+
+```{R,warning = FALSE}
+set.seed(123)
+
+# first run with full model (for subsequent evaluation of model)
+modelfull = glm(CARAVAN ~.- Index,
+            data = caravanTrainUP, 
+            family = binomial)
+
+summary(modelfull)
+```
+
+Test full model on train set
+
+```{R, warning = FALSE}
+trainPredictFull = predict(modelfull, newdata = caravanTrain, type = "response")
+# received warning message. Model is not stable due to high multi-collinearity between variables
+
+# append probability to dataset
+caravanTrain1 = caravanTrain
+caravanTrain1$probability = trainPredictFull
+
+# show confusion matrix
+p_class = ifelse(trainPredictFull > 0.5,1,0)
+
+matrix_table = table(caravanTrain1$CARAVAN, p_class)
+matrix_table
+
+accuracy = sum(diag(matrix_table))/sum(matrix_table)
+round(accuracy, 2)
+```
+
+Test full model on test set
+
+```{R, warning = FALSE}
+testPredictFull = predict(modelfull, newdata = caravanTest, type = "response")
+# Received warning message. Model is not stable due to high multi-collinearity between variables
+
+# append probability to original dataset
+caravanTest1 = caravanTest
+caravanTest1$probability = testPredictFull
+
+# show confusion matrix
+p_class = ifelse(testPredictFull > 0.5,1,0)
+
+matrix_table = table(caravanTest1$CARAVAN, p_class)
+matrix_table
+
+accuracy = sum(diag(matrix_table))/sum(matrix_table)
+round(accuracy, 2)
+# accuracy is 0.7 for both train and test set
+```
+
+Show ROC curve
+
+```{R, message = FALSE}
+# roc train for full model
+rocTrain=roc(caravanTrain1,CARAVAN,probability,plot=TRUE,grid=TRUE,legacy.axes = TRUE,smooth=TRUE)
+lines(rocTrain, col="red", type='l')
+text(0.3, 0.43, labels=sprintf("Train AUC: %0.3f", auc(rocTrain)), col="red")
+
+# roc test for full model
+rocTest=roc(caravanTest1,CARAVAN,probability,plot=TRUE,add=TRUE,smooth=TRUE)
+lines(rocTest, col="blue", type='l')
+text(0.3, 0.35, labels=sprintf("Test AUC: %0.3f", auc(rocTest)), col="blue")
+```
+
+Perform logistic regression on reduced model by eliminating variables based on business understanding
+
+```{R}
+# remove the below variables
+# remove main customer type since it is related to customer subtype
+# remove rented houses (retain home owners)
+# remove religion variables since it does not affect marketing strategy
+# remove 2 cars (MAUT2) and 1 car (MAUT1) variables (retain no car)
+# remove national health service
+# remove purchasing power class as it is related to income
+# remove income range (MINKXXX) as it is related to avg income
+# remove social class (MSKXXX) as it is related to occupation(MBkey)
+# remove Marriage, Living Together, other relation (MRXXX) as it can be determined through customer subtype
+# remove Household (MFXXX) as it can be explained through avg size household and avg age
+# re-run model with reduced set of variable
+
+model1 = glm(CARAVAN ~.- Index- MOSHOOFD-`MHHUUR-0`
+             -`MGODRK-0`-`MGODPR-0`-`MGODOV-0`-`MGODGE-0`
+             - `MAUT1-0` - `MAUT2-0`
+             - `MZFONDS-0`
+             - `MKOOPKLA-0`
+             - `MINKM30--0`- `MINK3045-0`- `MINK4575-0` -`MINK7512-0`- `MINK123M-0`
+             - `MSKA-0`  -  `MSKB1-0`   - `MSKB2-0`  -   `MSKC-0`   -  `MSKD-0` 
+             -`MRELGE-0`  - `MRELSA-0`  - `MRELOV-0`
+             - `MFALLEEN-0` -`MFGEKIND-0` -`MFWEKIND-0`, data = caravanTrainUP, family = binomial)
+summary(model1)
+alias(model1)
+vif(model1) 
+
+# remove Prin1(agri), Prin3(private3rd party), Prin7(disability), Prin9(Social Security), Prin12(Motorcycle), Prin15(Boat) as coefficient p-value <0.05 and is insignificant
+
+# re-run model
+
+model = glm(CARAVAN ~.- Index -MOSHOOFD-`MHHUUR-0`
+            -`MGODRK-0`-`MGODPR-0`-`MGODOV-0`-`MGODGE-0`
+            - `MAUT1-0` - `MAUT2-0`
+            - `MZFONDS-0`
+            - `MKOOPKLA-0`
+            - `MINKM30--0`- `MINK3045-0`- `MINK4575-0` -`MINK7512-0`- `MINK123M-0`
+            - `MSKA-0`  -  `MSKB1-0`   - `MSKB2-0`  -   `MSKC-0`   -  `MSKD-0` 
+            -`MRELGE-0`  - `MRELSA-0`  - `MRELOV-0`
+            - `MFALLEEN-0` -`MFGEKIND-0` -`MFWEKIND-0` 
+            - Prin1- Prin3- Prin7- Prin9- Prin12- Prin15,
+            data = caravanTrainUP, 
+            family = binomial)
+
+b = as.data.frame(vif(model)[,3])
+a = summary(model);a
+```
+
+Test model on train set
+
+```{R}
+trainPredict = predict(model, newdata = caravanTrain, type = "response")
+# append probability to original dataset
+caravanTrain$probability = trainPredict
+
+# show confusion matrix
+p_class = ifelse(trainPredict > 0.5,1,0)
+
+matrix_table = table(caravanTrain$CARAVAN, p_class)
+matrix_table
+
+accuracy = sum(diag(matrix_table))/sum(matrix_table)
+round(accuracy, 2)
+```
+
+Test model on test set
+
+```{R}
+testPredict = predict(model, newdata = caravanTest, type = "response")
+# append probability to original dataset
+caravanTest$probability = testPredict
+
+# show confusion matrix
+p_class = ifelse(testPredict > 0.5,1,0)
+
+matrix_table = table(caravanTest$CARAVAN, p_class)
+matrix_table
+
+accuracy = sum(diag(matrix_table))/sum(matrix_table)
+round(accuracy, 2)
+
+# accuracy of train and test are 0.7 and 0.68 respectively
+```
+
+
+Show variable importance
+
+```{R, message = FALSE}
+imp = as.data.frame(varImp(model))
+imp = data.frame(names   = rownames(imp), overall = imp$Overall)
+imp1 = imp[order(imp$overall,decreasing = T),]
+
+# create new variable variable
+imp2  = imp1%>%
+  mutate(variable = recode_factor(names, "Prin2" = "Logistics & Machines Insurance (Prin2)", "Prin11" = "Lorry Insurance (Prin11)", "Prin6" = "Surfboard Insurance (Prin6)",
+                                  "Prin13" = "Motorcycles/Scooters Insurance (Prin13)", "`MGEMLEEF-0`" = "Avg Age (MGEMLEEF)", "MOSTYPE23" = "Young & Rising Cust Sub-Group (MOSTYPE23)",
+                                  "Prin8" = "Car Insurance (Prin8)", "`MBERMIDD-0`" = "Middle Management (MBERMIDD)", "Prin14" = "Private Accident Insurance (Prin14)",
+                                  "MOSTYPE12" = "Affluent Young Families Cust Sub-Group (MOSTYPE12)", "`MHKOOP-0`" = "Home Owners (MHKOOP)", "MOSTYPE8" = "Middle Class Families Cust Sub-Group (MOSTYPE8)", 
+                                  "`MBERARBG-0`" = "Skilled Labourers (MBERARBG)", "`MBERZELF-0`" = "Entrepreneur (MBERZELF)", "`MAUT0-0`" = "No Car (MAUTO)", "`MOPLLAAG-0`" = "Lower Level Education (MOPLLAAG)",
+                                  "`MBERARBO-0`" = "Unskilled Labourers (MBERARBO)", "MOSTYPE25" = "Young Seniors in the City Cust Sub-Group (MOSTYPE25)", "`MZPART-0`" = "Private Health Insurance (MZPART)", 
+                                  "MOSTYPE38" = "Traditional Families Cust Sub-Group (MOSTYPE38)", "MOSTYPE4" = "Affluent Senior Apartments Cust Sub-Group (MOSTYPE4)", "`MBERHOOG-0`" = "High status (MBERHOOG)",
+                                  "MOSTYPE35" = "Village Families Cust Sub-Group (MOSTYPE35)", "MOSTYPE27" = "Seniors in Apartments Cust Sub-Group (MOSTYPE27)", "Prin10" = "Trailer Insurance (Prin10)",
+                                  "MOSTYPE29" = "Porchless Seniors Cust Sub-Group (MOSTYPE29)", "MOSTYPE5" = "Mixed Seniors Cust Sub-Group (MOSTYPE5)", "MOSTYPE24" = "Young, Low Educated Cust Sub-Group (MOSTYPE24)",
+                                  "MAANTHUI" = "Number of Houses (MAANTHUI)", "`MINKGEM-0`" = "Avg Income (MINKGEM)" )) 
+
+imp2$variable <- factor(imp2$variable, levels = imp2$variable[order(imp2$overall)])
+
+imp2 %>%
+  top_n(30) %>%
+  ggplot(aes(x = variable, y = overall)) + coord_flip() +
+  geom_bar(stat='identity') + labs(x= "Variable", y= "Importance",title = "Variable Importance") +
+  theme(panel.grid.major = element_blank())
+```
+
+Measure goodness of fit (Chisq)
+
+```{R}
+anova(model,model1,test="Chisq")
+```
+
+Show ROC curve
+
+```{R, message = FALSE}
+# roc train on model
+rocTrain=roc(caravanTrain,CARAVAN,probability,plot=TRUE,grid=TRUE,legacy.axes = TRUE,smooth=TRUE)
+lines(rocTrain, col="red", type='l')
+text(0.3, 0.43, labels=sprintf("Train AUC: %0.3f", auc(rocTrain)), col="red")
+ 
+# roc test on model
+rocTest=roc(caravanTest,CARAVAN,probability,plot=TRUE,add=TRUE,smooth=TRUE)
+lines(rocTest, col="blue", type='l')
+text(0.3, 0.35, labels=sprintf("Test AUC: %0.3f", auc(rocTest)), col="blue")
+
+# AUC of 0.782 and 0.714 for train and test respectively
+```
+
+Show lift curve
+
+```{R}
+# lift curve for train
+pred = prediction(trainPredict, caravanTrain$CARAVAN)
+perf = performance(pred, "lift", "rpp" )
+plot(perf, main="Lift Curve", xlab = 'Proportion of Customers (Sorted Probability)')
+
+# lift curve for test
+pred = prediction(testPredict, caravanTest$CARAVAN)
+perf = performance(pred, "lift", "rpp" )
+plot(perf, main="Lift Curve", xlab = 'Proportion of Customers (Sorted Probability)')
+```
+
+Multiple probability by 1000 for scorecard generation use
+
+```{R}
+caravanTrain$score = trainPredict * 1000
+caravanTest$score = testPredict * 1000
+
+# rbind train and test set 
+overall = rbind(caravanTrain,caravanTest)
+summary(overall)
+
+# original dataset is named "overall"
+```
+
+Show overall distribution of scores
+```{R}
+overall %>%
+  ggplot(aes(x = score)) +
+    geom_histogram(binwidth=100) 
+```
+
+Insert cluster information into "overall" dataset  
+Read csv containing cluster information
+
+```{R}
+caravanTrainCluster <- read.csv("caravanTrain.csv")
+caravanTestCluster  <- read.csv("caravanTest.csv")
+```
+
+Perform profiling by cluster number
+
+```{R}
+# perform profiling for train dataset  
+clustercountTrain = caravanTrainCluster %>%
+  group_by(KMEDOID_4) %>%
+  count(KMEDOID_4)
+
+addmargins(table(caravanTrainCluster$KMEDOID_4, caravanTrainCluster$CARAVAN))
+
+# perform profiling for test dataset  
+clustercountTest = caravanTestCluster %>%
+  group_by(KMEDOID_4) %>%
+  count(KMEDOID_4)
+
+addmargins(table(caravanTestCluster$KMEDOID_4, caravanTestCluster$CARAVAN))
+
+# show proportion of 0 and 1 for CARAVAN
+caravanTrainCluster %>%
+  group_by(KMEDOID_4, CARAVAN) %>%
+  summarise(count = n(), percentage = n()/nrow(caravanTrainCluster))
+
+str(caravanTestCluster$KMEDOID_4)
+caravanTestCluster$KMEDOID_4 = factor(caravanTestCluster$KMEDOID_4)
+```
+
+Update cluster number by matching cluster distribution in train and test dataset
+
+```{R}
+# based on cluster distribution, cluster 1 in test corresponds to cluster 2 in train and 
+# cluster 2 in test corresponds to cluster 1 in train 
+# recode cluster no (KMEDOID_4) in caravanTest to be similar to cluster no in caravanTrain 
+# recode cluster 1 to 2 and recode cluster 2 to 1 
+caravanTestCluster = caravanTestCluster%>%
+  mutate(KMEDOID_4new = recode_factor(KMEDOID_4, "2" = "5"))
+caravanTestCluster = caravanTestCluster%>%
+  mutate(KMEDOID_4new = recode_factor(KMEDOID_4new, "1" = "2"))
+caravanTestCluster = caravanTestCluster%>%
+  mutate(KMEDOID_4new = recode_factor(KMEDOID_4new, "5" = "1"))
+
+caravanTestCluster$KMEDOID_4 = caravanTestCluster$KMEDOID_4new
+
+caravanTestCluster = caravanTestCluster%>%
+  select(-KMEDOID_4new)
+```
+
+Select only Index and kmedoid variables from cluster datasets 
+
+```{R}
+caravanTrainCluster1 = caravanTrainCluster%>%
+  select(c(Index, KMEDOID_4))
+
+caravanTestCluster1 = caravanTestCluster%>%
+  select(c(Index, KMEDOID_4))
+
+CaravanOverallCluster = rbind(caravanTrainCluster1,caravanTestCluster1)
+```
+
+Append "overall" dataset to cluster dataset via join function
+
+```{R}
+overall2 = full_join(overall, CaravanOverallCluster, by = "Index")
+
+# split dataset by cluster number 
+# based on conversion rate, we are only interested in binning cluster numbers 1 and 2
+cluster1 = overall2 %>%
+  filter(KMEDOID_4 == 1)
+
+cluster2 = overall2 %>%
+  filter(KMEDOID_4 == 2)
+```
+
+**Scorecard Generation**
+
+Calculate goodrate for population
+
+```{R}
+overallGoodrate = sum(overall2$CARAVAN==1)/nrow(overall2)
+```
+
+Perform binning for cluster 1 and 2
+
+```{R}
+# binning for cluster 1
+bins1 = rbin_manual(cluster1, CARAVAN, score, c(250, 340, 420, 510, 590, 680, 785)) #8 bins
+binsCluster1 = data.frame(bins1[[1]])
+
+# calculate lift for cluster1
+# overallGoodrate = binsCluster1$good_cum_count[nrow(binsCluster1)]/ nrow(cluster1)
+binsCluster1$lift = binsCluster1$good_rate/overallGoodrate;binsCluster1
+
+# binning for cluster2 
+bins2 = rbin_manual(cluster2, CARAVAN, score, c(340, 410, 480, 540, 610, 700)) #7 bins
+binsCluster2 = data.frame(bins2[[1]])
+
+# calculate lift for cluster2 
+binsCluster2$lift = binsCluster2$good_rate/overallGoodrate;binsCluster2
+
+```
+
+Generate scorecard
+
+```{R}
+scorecard1 = data.frame(binsCluster1['bin'],binsCluster1['cut_point'],binsCluster1['bin_count'],binsCluster1['good'],binsCluster1['bin_cum_count'],round(binsCluster1['bin_prop']*100,1), round(binsCluster1['good_rate']*100,2), round(binsCluster1['lift'],2))
+scorecard2 = data.frame(binsCluster2['bin'],binsCluster2['cut_point'],binsCluster2['bin_count'],binsCluster2['good'],binsCluster2['bin_cum_count'],round(binsCluster2['bin_prop']*100,1), round(binsCluster2['good_rate']*100,2), round(binsCluster2['lift'],2))
+
+# reorder bin number
+scorecard1 = arrange(scorecard1, desc(bin))
+scorecard1 = select(scorecard1, -bin)
+scorecard1$bin = seq(1,8)
+scorecard1
+scorecard2 = arrange(scorecard2, desc(bin))
+scorecard2 = select(scorecard2, -bin)
+scorecard2$bin = seq(1,7)
+scorecard2
+
+# rename variable
+scorecard1=rename(scorecard1,"good_rate(%)"=good_rate)
+scorecard2=rename(scorecard2,"good_rate(%)"=good_rate)
+```
+
+Plot lift curve for clusters 1 and 2 with updated bin number
+
+```{R}
+# re-plot lift for cluster 1 with updated bin number
+scorecard1 %>%
+  ggplot(aes(x = bin, y = lift)) +
+  geom_point(shape=23, fill="blue", size=3) + geom_line() + geom_hline(yintercept = 1, col = "blue") + 
+  ggtitle("Lift Chart for Cluster 1") + ylab("Lift") + scale_x_continuous(breaks = seq(1,8, by = 1)) + 
+  xlab("Bin Number") + geom_text(aes(0,1,label = "No Model", vjust = 1, hjust = -8.5)) + 
+  coord_cartesian(xlim = c(1, 8), ylim = c(0, 4))
+
+# re-plot lift for cluster 2 with updated bin number
+scorecard2 %>%
+  ggplot(aes(x = bin, y = lift)) +
+  geom_point(shape=23, fill="blue", size=3) + geom_line() + geom_hline(yintercept = 1, col = "blue") + 
+  ggtitle("Lift Chart for Cluster 2") + ylab("Lift") + scale_x_continuous(breaks = seq(1,7, by = 1)) +
+  xlab("Bin Number") + geom_text(aes(0,1,label = "No Model", vjust = 1, hjust = -9.5)) +
+  coord_cartesian(xlim = c(1, 7), ylim = c(0, 3))
+
+# compare goodrate of cluster 1 and 2
+Compare = rbind(scorecard1, scorecard2)
+Compare$cluster = rep(c(1, 2), times = c(8, 7))
+
+Compare %>%
+  ggplot(aes(x = bin, y = `good_rate(%)`, fill = as.factor(cluster))) +
+  geom_bar(stat='identity') + facet_wrap(~cluster) + geom_hline(yintercept = overallGoodrate*100, col = "blue") +
+  labs(x= "Bin Number", y= "Good Rate", fill = "cluster",
+     title = "Distribution of Good Rate by Cluster") + coord_cartesian(ylim = c(0, 25)) +
+  scale_fill_discrete(name = "Cluster") + scale_x_continuous(breaks = seq(1,8, by = 1)) + 
+  geom_text(aes(label=round(`good_rate(%)`,1)),vjust = 0, size = 3.2) +
+  geom_text(aes(0,1,label = "5.97", vjust = -5.5, hjust = -12), size = 3)
+```
+
